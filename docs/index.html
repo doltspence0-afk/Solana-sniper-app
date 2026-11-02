@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://api.github.com; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'">
+<meta name="theme-color" content="#000000">
+<meta name="color-scheme" content="dark">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Sniper Desk (Paper Trading)</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" href="icons/icon-192.png">
+<link rel="stylesheet" href="app.css">
+</head><body class="boot">
+<div id="splash"><img src="icons/icon-192.png" alt="" width="96" height="96"><div class="logo">SNIPER DESK</div><div class="pill a">PAPER TRADING</div></div>
+<header><div class="brand"><b>SNIPER DESK</b><span class="pill a">PAPER</span></div>
+<div class="stat"><span id="dot" class="dot never"></span><span id="scanage">Loading…</span><button id="refresh" class="icon" aria-label="Refresh">↻</button></div></header>
+<main id="view"></main>
+<nav id="nav"><a href="#home">⌂<span>Home</span></a><a href="#scanner">⌕<span>Scanner</span></a><a href="#open">◆<span>Open</span></a><a href="#history">≣<span>History</span></a><a href="#more">⋯<span>More</span></a></nav>
+<script src="calc.js"></script><script src="app.js"></script>
+</body></html>
