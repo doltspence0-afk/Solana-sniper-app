@@ -1,0 +1,61 @@
+name: paper-desk
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+    inputs:
+      command:
+        description: "What to do"
+        required: true
+        default: scan
+        type: choice
+        options: [scan, pause, resume, settings, reset_settings]
+      payload:
+        description: "JSON for the settings command"
+        required: false
+        default: ""
+        type: string
+permissions:
+  contents: write
+concurrency:
+  group: paper-desk
+  cancel-in-progress: false
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unpack first-time upload (zip), if present
+        run: |
+          if [ -f solana-paper-desk.zip ]; then
+            unzip -o -q solana-paper-desk.zip -x '.github/*'
+            rm solana-paper-desk.zip
+          fi
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Self-test (must pass before any trading logic runs)
+        run: python -m unittest discover tests
+      - name: Apply app command
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          CMD: ${{ inputs.command }}
+          PAYLOAD: ${{ inputs.payload }}
+        run: python bot/control.py
+      - name: Paper scan
+        run: python bot/main.py
+      - name: Validate state
+        run: python bot/main.py --check
+      - name: Commit results
+        run: |
+          git config user.name "paper-desk-bot"
+          git config user.email "paper-desk-bot@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then echo "nothing to commit"; exit 0; fi
+          git commit -q -m "paper-desk: update"
+          for i in 1 2 3; do
+            if git pull --rebase -q && git push -q; then exit 0; fi
+            sleep $((i * 5))
+          done
+          echo "push failed" >&2; exit 1
