@@ -1,7 +1,7 @@
 name: paper-desk
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    - cron: "7,22,37,52 * * * *"
   workflow_dispatch:
     inputs:
       command:
@@ -9,7 +9,7 @@ on:
         required: true
         default: scan
         type: choice
-        options: [scan, pause, resume, settings, reset_settings]
+        options: [scan, pause, resume, halt, clear_halt, settings, reset_settings]
       payload:
         description: "JSON for the settings command"
         required: false
@@ -26,28 +26,38 @@ jobs:
     timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
-      - name: Unpack first-time upload (zip), if present
+      - name: Unpack uploaded zip (never touches your state or config)
+        id: unpack
         run: |
           if [ -f solana-paper-desk.zip ]; then
-            unzip -o -q solana-paper-desk.zip -x '.github/*'
+            unzip -o -q solana-paper-desk.zip -x '.github/*' 'docs/state.json' 'docs/config.json' 'data/*'
             rm solana-paper-desk.zip
           fi
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - name: Self-test (must pass before any trading logic runs)
+        id: tests
         run: python -m unittest discover tests
       - name: Apply app command
+        id: control
         if: github.event_name == 'workflow_dispatch'
         env:
           CMD: ${{ inputs.command }}
           PAYLOAD: ${{ inputs.payload }}
         run: python bot/control.py
       - name: Paper scan
+        id: scan
         run: python bot/main.py
       - name: Validate state
         run: python bot/main.py --check
+      - name: Record failure so the app can show why
+        if: failure() && steps.unpack.outcome == 'success'
+        env:
+          REASON: ${{ steps.tests.outcome == 'failure' && 'self-test failed' || steps.control.outcome == 'failure' && 'command rejected' || steps.scan.outcome == 'failure' && 'scan crashed' || 'state check failed' }}
+        run: python bot/main.py --heartbeat
       - name: Commit results
+        if: always() && steps.unpack.outcome == 'success'
         run: |
           git config user.name "paper-desk-bot"
           git config user.email "paper-desk-bot@users.noreply.github.com"
