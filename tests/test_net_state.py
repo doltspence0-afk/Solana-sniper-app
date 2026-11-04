@@ -37,13 +37,14 @@ class NetTests(Base):
     def test_jitter_within_bounds(self):
         k = Clk(); c = client([(500,), (200, {})], k, jitter=True); c.get_json(U); self.assertTrue(0.5 <= k.sleeps[0] <= 1.0)
 
-DEX_PROFILES = [dict(chainId="solana", tokenAddress="T1"), dict(chainId="ethereum", tokenAddress="E1"), dict(chainId="solana", tokenAddress="T2")]
-DEX_PAIRS = [pair("T1", liq=1000), pair("T1", liq=90000, price=2.5), dict(baseToken=dict(address="T2", symbol="T2"), priceUsd=None, liquidity=None, volume=None, priceChange=None)]
+T1, T2, E1 = "T1" + "a" * 40, "T2" + "a" * 40, "E1" + "a" * 40
+DEX_PROFILES = [dict(chainId="solana", tokenAddress=T1), dict(chainId="ethereum", tokenAddress=E1), dict(chainId="solana", tokenAddress=T2), dict(chainId="solana", tokenAddress="<script>")]
+DEX_PAIRS = [pair(T1, liq=1000), pair(T1, liq=90000, price=2.5), dict(baseToken=dict(address=T2, symbol="T2"), priceUsd=None, liquidity=None, volume=None, priceChange=None)]
 
 class MarketIntegration(Base):
     def setUp(self):
         super().setUp(); self.k = Clk(); self.calls = []
-        def op(url, h):
+        def op(url, h, data=None):
             self.calls.append((url, dict(h)))
             if "token-profiles" in url: return 200, json.dumps(DEX_PROFILES).encode(), {}
             if "token-boosts" in url: return 200, b"[]", {}
@@ -52,9 +53,9 @@ class MarketIntegration(Base):
             return 404, b"", {}
         b.CLIENT = netclient.Client(opener=op, sleep=self.k.sleep, clock=self.k.clock, jitter=False)
     def test_scout_parses_documented_shapes(self):
-        ps = b.scout(); self.assertEqual({p["baseToken"]["address"] for p in ps}, {"T1", "T2"})
-        self.assertEqual([p for p in ps if p["baseToken"]["address"] == "T1"][0]["priceUsd"], "2.5")  # best-liquidity pair
-        self.assertTrue(all("E1" not in u for u, _ in self.calls))                                    # non-Solana ignored
+        ps = b.scout(); self.assertEqual({p["baseToken"]["address"] for p in ps}, {T1, T2})
+        self.assertEqual([p for p in ps if p["baseToken"]["address"] == T1][0]["priceUsd"], "2.5")  # best-liquidity pair
+        self.assertTrue(all(E1 not in u and "script" not in u for u, _ in self.calls))                                    # non-Solana ignored
     def test_null_fields_become_unverified_not_crash(self):
         st = b.new_state(); b.run(st, 5000, cfg=NOCFG)
         self.assertTrue(any(r["symbol"] == "T2" and r["verdict"] == "unverified" for r in st["rejected"]))

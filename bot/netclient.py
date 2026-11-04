@@ -6,11 +6,11 @@ from urllib.parse import urlparse
 # Minimum seconds between calls per host. Chosen below documented free limits:
 # DexScreener 60/min (docs.dexscreener.com), GeckoTerminal 30/min (apiguide.geckoterminal.com),
 # RugCheck: no official figure found; third-party guidance suggests 2-3s gaps.
-MIN_GAP = {"api.dexscreener.com": 1.2, "api.rugcheck.xyz": 3.0, "api.geckoterminal.com": 2.5}
+MIN_GAP = {"api.dexscreener.com": 1.2, "api.rugcheck.xyz": 3.0, "api.geckoterminal.com": 2.5, "api.mainnet-beta.solana.com": 0.6}
 RETRY_STATUS = {0, 429, 500, 502, 503, 504}
 
-def _default_opener(url, headers, timeout=15):
-    req = urllib.request.Request(url, headers=headers)
+def _default_opener(url, headers, data=None, timeout=15):
+    req = urllib.request.Request(url, headers=headers, data=data)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return r.status, r.read(), dict(r.headers)
@@ -42,21 +42,23 @@ class Client:
         d = min(self.cap, self.base * 2 ** attempt)
         return d * (0.5 + random.random() / 2) if self.jitter else d
 
-    def get_json(self, url, headers=None):
+    def get_json(self, url, headers=None, body=None):
         host = urlparse(url).hostname or ""
         hdrs = {"User-Agent": "paper-desk/1.0", "Accept": "application/json"}
         hdrs.update(headers or {})
+        data = json.dumps(body).encode() if body is not None else None
+        if data is not None: hdrs["Content-Type"] = "application/json"
         for attempt in range(self.retries + 1):
             gap = self.min_gap.get(host, 1.0)
             wait = self.last.get(host, -1e9) + gap - self.clock()
             if not self._nap(wait):
                 self._count(host, "budget"); return None
             self.last[host] = self.clock()
-            status, body, rh = self.opener(url, hdrs)
+            status, raw, rh = self.opener(url, hdrs) if data is None else self.opener(url, hdrs, data)
             self._count(host, str(status) if status != 200 else "ok")
             if status == 200:
-                if len(body) > self.max_bytes: self._count(host, "toobig"); return None
-                try: return json.loads(body)
+                if len(raw) > self.max_bytes: self._count(host, "toobig"); return None
+                try: return json.loads(raw)
                 except ValueError: self._count(host, "badjson"); return None
             if status not in RETRY_STATUS or attempt == self.retries:
                 return None
