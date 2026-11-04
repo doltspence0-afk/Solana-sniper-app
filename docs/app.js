@@ -49,9 +49,10 @@ function banners() {
   else if (failed && S) add("Could not refresh. Showing data already loaded.", "warn");
   else if (cached) add("Showing saved data (not fresh).", "warn");
   if (!S) return b;
-  const f = K.freshness(S, now());
-  if (f.level === "warn") add("Scan delayed: last successful scan " + K.ago((f.ageMin) * 60) + ". GitHub's scheduler is best-effort.", "warn");
-  if (f.level === "stale") add("DATA STALE: last successful scan " + K.ago(f.ageMin * 60) + ". Open trades are NOT being monitored right now.", "bad");
+  const f = K.freshness(S, now()), dg = K.diagnose(S, now());
+  if (f.level === "warn") add("Scan delayed: last successful scan " + K.ago(f.ageMin * 60) + ". GitHub's scheduler is best-effort.", "warn");
+  if (f.level === "stale" || dg.level === "bad") add("DATA STALE: " + dg.text + (S.positions.length ? " Open trades are NOT being monitored right now." : ""), "bad");
+  else if (dg.level === "warn") add(dg.text, "warn");
   if (f.level === "never") add("No successful scan yet.", "warn");
   if (S.halted) add("HALTED: " + (S.halt_reason || "emergency shutdown") + ". No new trades.", "bad");
   if (S.paused) add("New entries are PAUSED. Open trades are still monitored.", "warn");
@@ -73,15 +74,33 @@ const pages = {
     return v;
   },
   scanner() {
-    const v = el("div"); v.append(el("h2", 0, "Coin scanner"));
-    if (!S.scanned.length) return kid(v, card(empty("Nothing scanned yet.")));
-    S.scanned.forEach((x) => {
-      const cls = { bought: "g", ok: "g", reject: "r", unverified: "a" }[x.verdict] || "n";
-      v.append(card(kid(el("div", "top"), el("b", 0, x.symbol), pill(x.verdict, cls)),
+    const v = el("div"), ev = S.evals || [];
+    v.append(el("h2", 0, "Best opportunities"));
+    v.append(card(el("div", "note", "Quality over quantity: a coin must pass every mandatory check. Zero trades is a normal result. Score weights are heuristics, not backtested.")));
+    if (!ev.length && !S.scanned.length) return kid(v, card(empty("Nothing scanned yet.")));
+    if (!ev.length) S.scanned.forEach((x) => v.append(card(kid(el("div", "top"), el("b", 0, x.symbol), pill(x.verdict, { bought: "g", ok: "g", reject: "r", unverified: "a" }[x.verdict] || "n")),
+      row("Price", "$" + px(x.price)), row("Liquidity", "$" + num(x.liq)), x.why ? el("div", "why", x.why) : null, dexLink(x.pair))));
+    ev.forEach((x) => {
+      const cls = { bought: "g", qualified: "g", reject: "r", unverified: "a" }[x.verdict] || "n";
+      v.append(card(kid(el("div", "top"), el("b", 0, x.symbol), pill(x.verdict + (x.score != null ? " · " + x.score + "/100" : ""), cls)),
         row("Price", "$" + px(x.price)), row("1h change", x.ch1h == null ? "–" : K.pct(x.ch1h), x.ch1h == null ? "" : sgn(x.ch1h)),
-        row("Liquidity", "$" + num(x.liq)), row("24h volume", "$" + num(x.vol)), row("Age", x.age_h == null ? "–" : x.age_h + " h"),
-        x.why ? el("div", "why", x.why) : null, dexLink(x.pair)));
+        row("Liquidity / 24h vol", "$" + num(x.liq) + " / $" + num(x.vol)), row("Age", x.age_h == null ? "–" : x.age_h + " h"),
+        x.parts ? el("div", "why", Object.keys(x.parts).map((k) => k + " " + x.parts[k][0] + "/" + x.parts[k][1]).join(" · ")) : null,
+        (x.fails || []).map((f) => el("div", x.verdict === "bought" ? "why" : "fail", (x.verdict === "bought" ? "✓ " : "✗ ") + f)), dexLink(x.pair)));
     });
+    return v;
+  },
+  health() {
+    const v = el("div"), dg = K.diagnose(S, now()), g = K.gaps(S.run_hist), med = K.median(g), hs = Object.keys(S.http || {});
+    v.append(el("h2", 0, "Scanner & API health"));
+    v.append(card(el("div", "banner " + (dg.level === "ok" ? "good" : dg.level === "warn" ? "warn" : "bad"), dg.text),
+      row("Last run started", S.last_run || S.last_scan ? K.ago(now() - (S.last_run || S.last_scan)) : "never"), row("Last successful scan", S.last_ok ? K.ago(now() - S.last_ok) : "never"),
+      row("Last run result", S.run_status || "–"), row("Consecutive failed runs", String(S.consec_fail || 0)),
+      row("Typical gap between runs", med == null ? "–" : med.toFixed(0) + " min"), row("Longest recent gap", g.length ? Math.max(...g).toFixed(0) + " min" : "–"),
+      row("Entries suspended", S.dq_block || "no"), row("Deployed code version", S.version || "unknown (pre-v4)"), el("div", "note", "GitHub's scheduler is best-effort, so gaps are often longer than requested.")));
+    v.append(card(el("h3", 0, "API calls in the latest run"), hs.length ? null : empty("No data yet."),
+      hs.map((h) => row(h, Object.keys(S.http[h]).map((k) => k + ": " + S.http[h][k]).join("  ")))));
+    const g2 = S.gates || {}; v.append(card(el("h3", 0, "Mandatory entry rules"), Object.keys(g2).length ? Object.keys(g2).map((k) => row(k, String(g2[k]))) : empty("Appears after the first run.")));
     return v;
   },
   open() {
@@ -106,12 +125,14 @@ const pages = {
     return v;
   },
   perf() {
-    const p = K.perf(S), v = el("div"), f = (x, fn) => (x == null ? "–" : fn(x)); v.append(el("h2", 0, "Performance · paper"));
+    const p = K.perf(S), m = K.summarize(S), v = el("div"), sh = (S.shadow && S.shadow.stats) || {}, f = (x, fn) => (x == null ? "–" : fn(x)); v.append(el("h2", 0, "Performance · paper"));
     kid(v, card(el("h3", 0, "Equity curve (virtual)"), chart(S.eq_hist)),
-      card(row("Closed trades", String(p.n)), row("Win rate", f(p.winRate, (x) => x.toFixed(0) + "%")), row("Realised P&L", K.money(p.realised), sgn(p.realised)),
+      card(row("Closed trades", String(p.n)), row("Unrealised P&L (open)", K.money(m.unrealised), sgn(m.unrealised)), row("Fees paid (closed trades)", K.money(S.closed.reduce((a, c) => a + (c.fees || 0), 0))), row("Win rate", f(p.winRate, (x) => x.toFixed(0) + "%")), row("Realised P&L", K.money(p.realised), sgn(p.realised)),
         row("Average win", f(p.avgWin, K.money), "pos"), row("Average loss", f(p.avgLoss, K.money), "neg"), row("Best trade", f(p.best, K.money)), row("Worst trade", f(p.worst, K.money)),
         row("Profit factor", f(p.profitFactor, (x) => x.toFixed(2))), row("Max drawdown (per scan)", p.maxDrawdownPct.toFixed(2) + "%")),
       card(el("h3", 0, "P&L per trade (last 30)"), bars(S.closed.slice(-30).map((c) => c.pnl))),
+      card(el("h3", 0, "Forward evidence (paper, before costs)"), Object.keys(sh).length ? Object.keys(sh).map((k) => row(k + " (n=" + sh[k].n + ")", "avg 6h " + K.pct(sh[k].sum6 / sh[k].n) + " · up " + Math.round(sh[k].wins / sh[k].n * 100) + "%")) : empty("Collecting. Needs many scans before it means anything."),
+        el("div", "note", "What passed/failed our gates did 6h later. Small samples are noise.")),
       card(el("div", "note", "Paper results ignore queueing, failed transactions and MEV. They are not a prediction of real results.")));
     return v;
   },
@@ -127,7 +148,7 @@ const pages = {
   },
   more() {
     const v = el("div"); v.append(el("h2", 0, "More"));
-    [["#perf", "Performance", "Win rate, drawdown, charts"], ["#agents", "Agent activity", "Decisions and rejections"], ["#settings", "Settings", "Install, controls, limits"]].forEach((x) => {
+    [["#health", "Scanner & API health", "Why scans are fresh or stale"], ["#perf", "Performance", "Win rate, drawdown, charts"], ["#agents", "Agent activity", "Decisions and rejections"], ["#settings", "Settings", "Install, controls, limits"]].forEach((x) => {
       const a = el("a", "card linkrow"); a.setAttribute("href", x[0]); kid(a, el("b", 0, x[1]), el("small", 0, x[2])); v.append(a); });
     return v;
   },
@@ -186,9 +207,15 @@ function settingsPage() {
   forget.addEventListener("click", () => { LS.del("gh_token"); say("Token removed from this phone.", "pos"); render(); });
   const run = (label, cmd, payload, cls) => { const b = el("button", "btn " + (cls || ""), label); if (!has) b.setAttribute("disabled", "disabled");
     b.addEventListener("click", async () => { try { say("Sending…", ""); const t0 = await dispatch(cmd, payload()); await track(t0, say); } catch (e) { say(e.message, "neg"); } }); return b; };
+  const stop = el("button", "btn danger", "EMERGENCY STOP"); let armed = false; if (!has) stop.setAttribute("disabled", "disabled");
+  stop.addEventListener("click", async () => {
+    if (!armed) { armed = true; stop.textContent = "Tap again: CLOSE ALL & HALT"; setTimeout(() => { armed = false; stop.textContent = "EMERGENCY STOP"; }, 5000); return; }
+    armed = false; stop.textContent = "EMERGENCY STOP";
+    try { say("Sending…", ""); const t0 = await dispatch("halt", ""); await track(t0, say); } catch (e) { say(e.message, "neg"); } });
   msgEl = el("div", "msg", has ? "Ready." : "Add a token to enable the buttons below.");
   kid(ctl, el("label", 0, "GitHub username"), io, el("label", 0, "Repository name"), ir, el("label", 0, "Fine-grained token"), it, kid(el("div", "btns"), save, test, forget), msgEl,
-    kid(el("div", "btns"), run("Scan now", "scan", () => ""), run(S && S.paused ? "Resume entries" : "Pause entries", S && S.paused ? "resume" : "pause", () => "", "alt")));
+    kid(el("div", "btns"), run("Scan now", "scan", () => ""), run(S && S.paused ? "Resume entries" : "Pause entries", S && S.paused ? "resume" : "pause", () => "", "alt")),
+    kid(el("div", "btns"), stop, S && S.halted ? run("Clear halt", "clear_halt", () => "", "alt") : null));
   const form = card(el("h3", 0, "Trading limits (paper)")), inputs = {}, eff = (S && S.cfg) || {};
   K.SETTINGS.forEach((d) => { const i = el("input", "inp"); i.setAttribute("inputmode", "decimal"); i.setAttribute("type", "number"); i.setAttribute("step", d.pct ? d.step * 100 : d.step);
     const cur = eff[d.key] != null ? eff[d.key] : d.def; i.value = String(d.pct ? +(cur * 100).toFixed(3) : cur); inputs[d.key] = i;
@@ -210,7 +237,7 @@ function render() {
   $("#dot").className = "dot " + f.level; $("#scanage").textContent = S && S.last_ok ? "Last scan " + K.ago(f.ageMin * 60) : "No scan yet";
   let body; try { body = S || r === "settings" || r === "more" ? page() : nodata(); } catch (e) { body = card(el("div", "banner bad", "Display error: " + e.message)); }
   $("#view").replaceChildren(banners(), body);
-  const key = ["perf", "agents", "settings"].includes(r) ? "more" : r;
+  const key = ["perf", "agents", "settings", "health"].includes(r) ? "more" : r;
   document.querySelectorAll("#nav a").forEach((a) => a.classList.toggle("on", a.getAttribute("href") === "#" + key));
   document.body.classList.remove("boot");
 }

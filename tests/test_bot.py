@@ -2,14 +2,12 @@ import os, sys, tempfile, unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "bot"))
 import main as b
 
-def pair(m="M1", liq=100000, vol=90000, ch=10, price=1.0, buys=200, sells=80):
-    return dict(baseToken=dict(address=m, symbol=m), priceUsd=str(price), liquidity=dict(usd=liq),
-                volume=dict(h24=vol), priceChange=dict(h1=ch), txns=dict(h1=dict(buys=buys, sells=sells)))
-GOOD = dict(markets=[dict(pubkey="AMM", lp=dict(lpLockedPct=100))], topHolders=[dict(address="AMM", pct=40), dict(address="a", pct=5)], risks=[])
+from support import pair, GOOD, OK_AUTH
+import tempfile as _tf
 
 class T(unittest.TestCase):
-    def setUp(self): self._o = (b.get, b.fetch_pairs, b.CLIENT)
-    def tearDown(self): b.get, b.fetch_pairs, b.CLIENT = self._o
+    def setUp(self): self._o = (b.get, b.fetch_pairs, b.CLIENT, b.authorities, b.CFG_PATH, b.ROOT); b.authorities = OK_AUTH; b.CFG_PATH = '/nonexistent/c.json'; b.ROOT = _tf.mkdtemp()
+    def tearDown(self): b.get, b.fetch_pairs, b.CLIENT, b.authorities, b.CFG_PATH, b.ROOT = self._o
     def st_with_pos(self, entry=1.0):
         st = b.new_state(); b.buy(st, pair(price=entry), 1000); return st
     def test_filter_ok_and_rejects(self):
@@ -46,9 +44,9 @@ class T(unittest.TestCase):
         st = self.st_with_pos(); st["positions"][0]["last"] = 0.01; st["balance"] = 7000; b.fetch_pairs = lambda m: {}
         b.manage(st, 1100); self.assertTrue(st["halted"]); self.assertIn("halted", b.can_enter(st))
     def test_persistence_roundtrip(self):
-        st = self.st_with_pos(); p = os.path.join(tempfile.mkdtemp(), "s.json"); b.save(st, p)
-        st2 = b.load(p); self.assertEqual(st2["balance"], st["balance"]); self.assertEqual(st2["traded"], ["M1"])
-        self.assertEqual(b.load("/nonexistent/x.json")["balance"], 10000.0)
+        st = self.st_with_pos(); d = tempfile.mkdtemp(); p, bk = os.path.join(d, "s.json"), os.path.join(d, "s.bak.json"); b.save(st, p, bk)
+        st2 = b.load(p, bk); self.assertEqual(st2["balance"], st["balance"]); self.assertEqual(st2["traded"], ["M1"])
+        self.assertEqual(b.load("/nonexistent/x.json", "/nonexistent/x.bak.json")["balance"], 10000.0)
     def test_scout_outage(self):
         b.get = lambda *a, **k: None; st = b.new_state(); b.run(st, 5000); self.assertTrue(st["warnings"]); self.assertEqual(st["positions"], [])
     def test_fees_reduce_equity(self):

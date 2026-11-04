@@ -1,43 +1,39 @@
 # Sniper Desk: Solana PAPER-trading app (installable PWA)
+Paper trading only. No wallet, key or swap code exists, and a test enforces that. Free stack: GitHub Actions + GitHub Pages.
+Real-money trading is a *design only*: see REAL_MONEY_DESIGN.md.
 
-Paper trading only. No wallet, private key or swap code exists in this project, and a test enforces that.
-Free stack: GitHub Actions (runs the bot every ~10 min) + GitHub Pages (hosts the app). No card, no paid APIs.
+## UPDATE an existing deployment (what you do on the phone)
+1. In your repo: **Add file -> Upload files** -> upload `solana-paper-desk.zip` (same name) -> Commit. (It never overwrites your `state.json`/`config.json`.)
+2. Open `.github/workflows/scan.yml` -> pencil icon -> select all -> paste the NEW workflow text from the chat -> Commit.
+3. **Actions -> paper-desk -> Run workflow**. Wait for a green tick, then open the app -> More -> **Scanner & API health**.
+4. If the run is red: tap it, open the red step, and send me the last ~20 lines of its log.
+Fresh install: same steps as before (upload zip, create `.github/workflows/scan.yml`, Pages -> main /docs).
 
-## Setup on a Samsung phone (about 10 minutes)
-1. Make a free account at github.com. Create a **Public** repository (e.g. `sniper-desk`).
-2. Repo page -> **Add file -> Upload files** -> pick `solana-paper-desk.zip` -> **Commit changes**. (Keep it as a zip.)
-3. **Add file -> Create new file**. Name it exactly `.github/workflows/scan.yml` (typing `/` makes folders). Paste the workflow text from the chat message. **Commit**.
-4. **Actions** tab -> **paper-desk** -> **Run workflow** -> Run. Wait for a green tick (1-2 min). The first run unpacks the zip, runs the self-tests, then runs a paper scan.
-5. **Settings -> Pages** -> Source: *Deploy from a branch* -> Branch `main`, folder `/docs` -> Save. After 1-3 min the page shows your link: `https://YOURNAME.github.io/REPO/`.
-6. Open that link in **Samsung Internet** (menu -> Add page to -> Home screen) or **Chrome** (⋮ -> Install app). It opens full-screen like a normal app.
+## What the strategy does now (quality over quantity)
+Every coin must pass ALL mandatory checks, otherwise zero trades is the correct result: age >= 6h, liquidity/volume minimums, >= 100 trades/h with >= 52% buys, not chasing
+(h1 <= +80%, 5m <= +12%, 6h <= +150%, not falling > 15%/h), mint & freeze authority renounced (read from Solana RPC), standard SPL-token mint, LP >= 90% locked and top-10 holders <= 30% (RugCheck), no RugCheck danger flags, score >= 75.
+The 0-100 score is shown component by component. Weights are heuristics, NOT backtested.
+Position size = smallest of cash %, risk budget (1% of equity lost at the stop), 1% of pool liquidity, and a 30% total-exposure cap. Entries are suspended if data quality degrades.
+Exits are still fixed stop-loss/take-profit: adaptive exits need evidence we do not have yet.
+Every evaluated coin keeps its accept/reject reasons (Opportunities page). "Forward evidence" (Performance page) records what passed/failed coins did 6h later.
 
-## Optional: make the buttons work (Scan now, Pause, Settings)
-GitHub -> your profile photo -> Settings -> Developer settings -> Personal access tokens -> **Fine-grained tokens** -> Generate.
-Repository access: *Only select repositories* -> your repo. Permissions -> Repository -> **Actions: Read and write**. Expiry: 90 days. Copy the token.
-In the app: More -> Settings -> paste into *Fine-grained token* -> Save -> Test connection.
-The token is stored only on your phone, sent only to api.github.com, and cannot be read from the public files. Without a token the app is read-only (buttons stay disabled).
-What the buttons really do: each one asks GitHub to run the workflow with a command. The server re-validates every value (see `bot/settings.py`). Pause stops *new* entries; open trades are still monitored.
-Results appear in the app after the run finishes and GitHub Pages redeploys (usually 1-3 min). If the status says "cancelled", tap again (GitHub keeps one waiting run).
+## Controls (need the optional GitHub token, as before)
+Scan now, Pause/Resume entries (open trades still monitored), **EMERGENCY STOP** (two taps: closes all paper positions and halts), Clear halt, and limits.
+Emergency stop file alternative: add an empty file named `HALT` to the repo root.
 
-## What is and isn't verified
+## Verification status
 | Item | Status |
 |---|---|
-| Trading engine, filters, limits, settings, rate limiter, state recovery, UI logic, PWA files, workflow config, secret scans | Automated tests (`python -m unittest discover tests`), run on every workflow run |
-| DexScreener endpoints/fields/rate limits | Checked against docs.dexscreener.com; **not called live** from the build environment |
-| GitHub workflow-dispatch API and token permission | Checked against docs.github.com. Browser CORS use, run-status polling: **not verified** |
-| RugCheck endpoint, fields, whether a key is needed | **Unverified** (only third-party sources, which disagree). If it fails, tokens become "unverified" and are never traded. See *API health* in the app |
-| App on a real Samsung phone, install prompt, GitHub deployment | **Not tested.** Needs your device and account |
-| Backtesting | **Not built yet** |
+| Engine, gates, authorities parsing, sizing, halt, heartbeat, settings, rate limiter, state recovery, UI logic, PWA, workflow config, secret scans | 89 automated tests (hermetic: they never read your live config/state) |
+| DexScreener endpoints/fields | Checked against official docs; **not called live** from the build environment |
+| Solana RPC `getAccountInfo` for mint/freeze authority | Standard documented RPC call; public endpoint availability from GitHub runners **unverified** |
+| RugCheck endpoint/fields/key requirement | **Unverified** (third-party sources only) |
+| GeckoTerminal trending/new pools response shape | **Unverified** (ignored safely if different) |
+| GitHub dispatch API | Checked against docs.github.com; browser CORS/run-status polling **unverified** |
+| Smart-money wallet tracking | **Not built** (needs a wallet-history data source; see chat) |
+| Historical backtester | **Not built** (free history lacks lock/holder data and has survivorship bias) |
+| Real phone / real GitHub run of this version | **Not tested** |
 
 ## Limits
-* Not 24/7: GitHub's scheduler is best-effort, so gaps of 10-60+ min happen. The app shows a stale-data warning, and stops/targets only trigger when a scan runs.
-* Paper fills ignore failed transactions, MEV and queueing; results do not predict real trading.
-* The repo and `docs/state.json` are public (paper data only; no secrets are stored anywhere in it).
-* ~144 commits/day from the bot (history grows slowly). You can edit the cron in `scan.yml`.
-* Emergency stop: add an empty file named `HALT` to the repo root, or disable the workflow.
-
-## Troubleshooting
-* App says "No data": run the workflow once; wait for Pages. * Workflow red: open the run and read the failing step (a failed self-test blocks scanning by design).
-* Buttons disabled: add the token. "403": token needs Actions: Read and write on this repo. "404": check username/repo and that `scan.yml` exists.
-* "DATA STALE": scheduler delayed or APIs down; open trades are not monitored until the next successful scan.
-* Old version showing: close the app fully and reopen (the service worker updates in the background).
+GitHub's scheduler is best-effort (this version asks for every 15 min, off the busy :00/:30 marks). Stops and targets only trigger when a scan runs. Paper fills ignore failed transactions and MEV.
+Troubleshooting: the **Scanner & API health** page states whether the scheduler, a failed step, or the market APIs are the problem.

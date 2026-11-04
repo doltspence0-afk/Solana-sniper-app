@@ -3,9 +3,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "bot"))
 import main as b
 
-def pair(m="M1", liq=100000, vol=90000, ch=10, price=1.0, buys=200, sells=80, pa=None):
+def pair(m="M1", liq=100000, vol=90000, ch=10, price=1.0, buys=200, sells=80, pa=None, age=24, now=5000, m5=1.0):
     return dict(baseToken=dict(address=m, symbol=m), priceUsd=str(price), liquidity=dict(usd=liq), pairAddress=pa or m * 2,
-                volume=dict(h24=vol), priceChange=dict(h1=ch), txns=dict(h1=dict(buys=buys, sells=sells)), pairCreatedAt=1_700_000_000_000)
+                volume=dict(h24=vol), priceChange=dict(h1=ch, m5=m5, h6=ch), txns=dict(h1=dict(buys=buys, sells=sells)),
+                pairCreatedAt=int((now - age * 3600) * 1000))
 GOOD = dict(markets=[dict(pubkey="AMM", lp=dict(lpLockedPct=100))], topHolders=[dict(address="AMM", pct=40), dict(address="a", pct=5)], risks=[])
 NOCFG = dict(paused=False, settings={})
 
@@ -14,9 +15,17 @@ class Clk:
     def clock(s): return s.t
     def sleep(s, x): s.sleeps.append(x); s.t += x
 
+REAL_AUTH = b.authorities
+OK_AUTH = lambda m: dict(program="spl-token", mint=None, freeze=None)
+
 class Base(unittest.TestCase):
-    def setUp(self): self._o = (b.get, b.fetch_pairs, b.CLIENT, dict(b.CFG))
-    def tearDown(self): b.get, b.fetch_pairs, b.CLIENT = self._o[:3]; b.CFG.clear(); b.CFG.update(self._o[3])
+    """Hermetic: never reads the live config.json / HALT file, never touches the network."""
+    def setUp(self):
+        import tempfile
+        self._o = (b.get, b.fetch_pairs, b.CLIENT, dict(b.CFG), b.authorities, b.CFG_PATH, b.ROOT)
+        b.authorities = OK_AUTH; b.CFG_PATH = "/nonexistent/config.json"; b.ROOT = tempfile.mkdtemp()
+    def tearDown(self):
+        b.get, b.fetch_pairs, b.CLIENT = self._o[:3]; b.CFG.clear(); b.CFG.update(self._o[3]); b.authorities, b.CFG_PATH, b.ROOT = self._o[4:]
 
 def populated_state():
     """Real engine output: one TP win, one SL loss, one open position, with equity history."""

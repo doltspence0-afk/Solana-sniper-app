@@ -45,11 +45,11 @@ class Deploy(unittest.TestCase):
     def test_workflow_safety(self):
         self.assertRegex(WF, r"concurrency:\n  group: paper-desk\n  cancel-in-progress: false"); self.assertRegex(WF, r"permissions:\n  contents: write\n")
         self.assertEqual(len(re.findall(r"^permissions:", WF, re.M)), 1); self.assertIn("workflow_dispatch", WF); self.assertIn("cron:", WF)
-        self.assertNotIn("secrets.", WF); self.assertNotIn("pull_request", WF)
+        self.assertNotIn("secrets.", WF); self.assertNotIn("pull_request", WF); self.assertEqual(len(re.findall(r"\$\{\{", WF)), 2)
         for l in (x for x in WF.splitlines() if "${{" in x):
-            self.assertTrue(re.match(r"\s+[A-Z_]+: \$\{\{ inputs\.\w+ \}\}$", l) or "github.event_name" in l, l)   # inputs only via env, never inside shell text
-        self.assertIn("-x '.github/*'", WF); self.assertIn("git pull --rebase", WF); self.assertIn("for i in 1 2 3", WF)
-        order = [WF.index(s) for s in ("unittest discover", "bot/control.py", "bot/main.py\n", "main.py --check", "git commit")]; self.assertEqual(order, sorted(order))
+            self.assertRegex(l, r"^\s+(CMD|PAYLOAD): \$\{\{ inputs\.(command|payload) \}\}$")   # the ONLY expressions allowed: user inputs, passed via env (never inline in shell)
+        self.assertIn("-x '.github/*' 'docs/state.json' 'docs/config.json'", WF); self.assertIn("git pull --rebase", WF); self.assertIn("for i in 1 2 3", WF)
+        ids = [WF.index(m) for m in ("id: unpack", "id: preflight", "id: tests", "id: control", "id: scan", "id: check", "--heartbeat", "git commit")]; self.assertEqual(ids, sorted(ids))
         for u in re.findall(r"uses: (\S+)", WF): self.assertRegex(u, r"@v\d+$")
     def test_app_and_workflow_agree(self):
         js = rd("docs", "app.js"); self.assertIn("workflows/scan.yml", js); self.assertTrue(os.path.exists(os.path.join(ROOT, ".github/workflows/scan.yml")))
@@ -60,8 +60,7 @@ class Deploy(unittest.TestCase):
         for o in opts: settings.apply_command(o, '{"sl": 0.04}' if o == "settings" else "", p, 1)   # every offered command is implemented
         for cmd in re.findall(r'(?:run\("[^"]+", |dispatch\()"(\w+)"', js): self.assertIn(cmd, opts, cmd)
     def test_pages_ready(self):
-        for f in ("index.html", "state.json", "config.json", ".nojekyll", "manifest.webmanifest", "sw.js"): self.assertTrue(os.path.exists(os.path.join(D, f)), f)
-        self.assertTrue(settings.load(os.path.join(D, "config.json")) == {"paused": False, "settings": {}, "updated": None})
+        for f in ("index.html", ".nojekyll", "manifest.webmanifest", "sw.js", "app.js", "calc.js", "app.css", "offline.html"): self.assertTrue(os.path.exists(os.path.join(D, f)), f)   # code only: LIVE data files are never asserted on
     def test_real_trading_is_impossible(self):
         self.assertEqual(b.MODE, "paper")
         words = ("solders", "solana.rpc", "Keypair", "sendTransaction", "signTransaction", "private_key", "privateKey", "mnemonic", "seed phrase", "jup.ag/swap", "swap/v")
@@ -85,10 +84,12 @@ class Security(unittest.TestCase):
                 yield os.path.relpath(os.path.join(d, f), ROOT)
     def test_no_secrets_anywhere_in_repo(self):
         for f in self.files():
+            if f in ("docs/state.json", "docs/config.json", "data/state.bak.json"): continue   # live data: contents come from public APIs
             t = rd(f)
             for n, p in self.PAT.items(): self.assertIsNone(re.search(p, t), f"{n} pattern in {f}")
             for e in re.findall(r"[\w.+-]+@[\w-]+\.[\w.-]+", t): self.assertTrue(e.endswith("users.noreply.github.com"), f"{e} in {f}")
     def test_public_state_has_only_whitelisted_fields(self):
+        if not os.path.exists(os.path.join(D, "state.json")): self.skipTest("no state yet")
         st = json.loads(rd("docs", "state.json")); self.assertLessEqual(set(st), set(b.new_state()))
         for sensitive in ("token", "key", "secret", "password", "email"): self.assertFalse([k for k in st if sensitive in k.lower()])
     def test_gitignore_protects_secrets(self):

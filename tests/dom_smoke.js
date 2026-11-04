@@ -19,7 +19,7 @@ global.fetch = async () => ({ ok: false, status: 404, headers: { get: () => null
 vm.runInThisContext(fs.readFileSync(path.join(__dirname, "../docs/app.js"), "utf8"));
 const walk = (e, f) => { f(e); e.kids.forEach((k) => walk(k, f)); };
 const out = [];
-for (const [name, d] of Object.entries(fx)) for (const r of ["home", "scanner", "open", "history", "perf", "agents", "more", "settings"]) {
+for (const [name, d] of Object.entries(fx)) for (const r of ["home", "scanner", "open", "history", "perf", "agents", "health", "more", "settings"]) {
   const rec = { state: name, route: r, ok: true, text: "", hrefs: [], tags: [] };
   try { __pd.setData(d.S, d.C); const e = __pd.pages[r](); rec.text = e.textContent; walk(e, (n) => { rec.tags.push(n.tag); if (n.attrs.href) rec.hrefs.push(n.attrs.href); });
     location.hash = "#" + r; __pd.render(); rec.view = q("#view").textContent; rec.age = q("#scanage").textContent; rec.dot = q("#dot").className; }
