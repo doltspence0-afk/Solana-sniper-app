@@ -24,38 +24,74 @@ jobs:
   run:
     runs-on: ubuntu-latest
     timeout-minutes: 8
+    env:
+      EXPECTED_VERSION: "4"
     steps:
       - uses: actions/checkout@v4
-      - name: Unpack uploaded zip (never touches your state or config)
+      - name: Unpack any uploaded update zip (replaces code only, never your state or config)
         id: unpack
         run: |
-          if [ -f solana-paper-desk.zip ]; then
-            unzip -o -q solana-paper-desk.zip -x '.github/*' 'docs/state.json' 'docs/config.json' 'data/*'
-            rm solana-paper-desk.zip
-          fi
+          shopt -s nullglob
+          installed=$(cat bot/VERSION 2>/dev/null || echo 0)
+          list=""
+          for z in ./*.zip ./*/*.zip; do
+            case "$z" in ./.git/*) continue ;; esac
+            if ! unzip -l "$z" 2>/dev/null | grep -q ' bot/main.py$'; then
+              echo "::warning::$z is not a Sniper Desk update, ignored"; continue
+            fi
+            v=$(unzip -p "$z" bot/VERSION 2>/dev/null | tr -dc '0-9' || true)
+            list="$list${v:-0} $z"$'\n'
+          done
+          while read -r v z; do
+            [ -n "$z" ] || continue
+            if [ "$v" -lt "$installed" ]; then
+              echo "::warning::$z is version $v but version $installed is installed; ignored"; rm -f "$z"; continue
+            fi
+            rm -rf bot tests tools
+            unzip -o -q "$z" -x '.github/*' 'docs/state.json' 'docs/config.json' 'data/*'
+            rm -f "$z"; installed=$v; echo "Installed $z (version $v)"
+          done < <(printf '%s' "$list" | sort -n -k1,1)
+      - name: Preflight (every code file must come from the same release)
+        id: preflight
+        run: |
+          fail() { echo "::error title=Update incomplete::$1 Upload sniper-desk-v$EXPECTED_VERSION.zip to the repo root (Add file > Upload files), then run this workflow again."; exit 1; }
+          have=$(cat bot/VERSION 2>/dev/null || echo 0)
+          [ "$have" = "$EXPECTED_VERSION" ] || fail "Workflow expects code version $EXPECTED_VERSION but the repo has version $have."
+          [ -f MANIFEST.sha256 ] || fail "MANIFEST.sha256 is missing."
+          bad=$(sha256sum -c MANIFEST.sha256 2>&1 | grep -v ': OK$' | head -5 | tr '\n' ';' || true)
+          [ -z "$bad" ] || fail "Some files differ from the release (mixed versions?): $bad"
+          find bot tests tools docs -type f ! -path '*/__pycache__/*' ! -name '*.pyc' ! -path 'docs/state.json' ! -path 'docs/config.json' | sort > "$RUNNER_TEMP/have.txt"
+          awk '{print $2}' MANIFEST.sha256 | sort > "$RUNNER_TEMP/want.txt"
+          extra=$(comm -13 "$RUNNER_TEMP/want.txt" "$RUNNER_TEMP/have.txt" | head -5 | tr '\n' ' ')
+          [ -z "$extra" ] || fail "Unexpected extra files: $extra"
+          echo "install verified: version $have, $(wc -l < MANIFEST.sha256) files match the release"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - name: Self-test (must pass before any trading logic runs)
         id: tests
-        run: python -m unittest discover tests
+        run: |
+          python -m unittest discover tests || { echo "self-test failed" > "$RUNNER_TEMP/reason"; exit 1; }
       - name: Apply app command
         id: control
         if: github.event_name == 'workflow_dispatch'
         env:
           CMD: ${{ inputs.command }}
           PAYLOAD: ${{ inputs.payload }}
-        run: python bot/control.py
+        run: |
+          python bot/control.py || { echo "command rejected" > "$RUNNER_TEMP/reason"; exit 1; }
       - name: Paper scan
         id: scan
-        run: python bot/main.py
+        run: |
+          python bot/main.py || { echo "scan crashed" > "$RUNNER_TEMP/reason"; exit 1; }
       - name: Validate state
-        run: python bot/main.py --check
+        id: check
+        run: |
+          python bot/main.py --check || { echo "state check failed" > "$RUNNER_TEMP/reason"; exit 1; }
       - name: Record failure so the app can show why
-        if: failure() && steps.unpack.outcome == 'success'
-        env:
-          REASON: ${{ steps.tests.outcome == 'failure' && 'self-test failed' || steps.control.outcome == 'failure' && 'command rejected' || steps.scan.outcome == 'failure' && 'scan crashed' || 'state check failed' }}
-        run: python bot/main.py --heartbeat
+        if: failure() && steps.preflight.outcome == 'success'
+        run: |
+          REASON="$(cat "$RUNNER_TEMP/reason" 2>/dev/null || echo "unexpected failure")" python bot/main.py --heartbeat
       - name: Commit results
         if: always() && steps.unpack.outcome == 'success'
         run: |
